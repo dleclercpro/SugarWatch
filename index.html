@@ -19,10 +19,22 @@
       </p>
       <p id="dash-time"></p>
     </div>
-    <div id="graph">
-      <svg id="graph-svg">
-        <line id="graph-bg-target-low" class="graph-bg-target" />
-        <line id="graph-bg-target-high" class="graph-bg-target" />
+
+    <svg id="graph">
+      <g id="graph-bg-targets">
+          <line id="graph-bg-target-low" class="graph-bg-target" />
+          <line id="graph-bg-target-high" class="graph-bg-target" />
+      </g>
+      <g id="graph-axis-time">
+        <text class="graph-axis-time-label" />
+        <line class="graph-axis-time-tick" />
+        <text class="graph-axis-time-label" />
+        <line class="graph-axis-time-tick" />
+        <text class="graph-axis-time-label" />
+        <line class="graph-axis-time-tick" />
+        <line id="graph-axis-time-now" />
+      </g>
+      <g id="graph-bgs">
         <circle class="graph-bg" />
         <circle class="graph-bg" />
         <circle class="graph-bg" />
@@ -311,19 +323,8 @@
         <circle class="graph-bg" />
         <circle class="graph-bg" />
         <circle class="graph-bg" />
-      </svg>
-      <div id="graph-axis-time">
-        <div class="graph-axis-time-tick">
-          <p class="graph-axis-time-tick-label"></p>
-        </div>
-        <div class="graph-axis-time-tick">
-          <p class="graph-axis-time-tick-label"></p>
-        </div>
-        <div class="graph-axis-time-tick">
-          <p class="graph-axis-time-tick-label"></p>
-        </div>
-      </div>
-    </div>
+      </g>
+    </svg>
   </div>
 
   <script src="js/app.js"></script>

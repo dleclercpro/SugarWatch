@@ -13,7 +13,6 @@ const TIME_3_H = 3 * 60 * 60;    // [s]
 const TIME_6_H = 2 * TIME_3_H;   // [s]
 const TIME_12_H = 2 * TIME_6_H;  // [s]
 const TIME_24_H = 2 * TIME_12_H; // [s]
-const TIME_REFRESH = 60 * 1000;  // Refreshing app rate [ms]
 
 // BGs
 const BG_UNITS = "mmol/L";
@@ -27,6 +26,8 @@ const GRAPH_BG_MAX = 16;                            // [mmol/L]
 const GRAPH_BG_LOW = 3.8;                           // [mmol/L]
 const GRAPH_BG_HIGH = 8.0;                          // [mmol/L]
 const GRAPH_BG_SCALE = GRAPH_BG_MAX - GRAPH_BG_MIN; // [mmol/L]
+const GRAPH_TIME_PADDING = 0.2;                     // [-]
+const GRAPH_TIME_AXIS_HEIGHT = 20;                  // [px]
 
 // Colors
 const COLOR_BG_HIGH = "#ff9d2f";
@@ -41,6 +42,18 @@ const BG_REQUEST_HEADERS = {
 };
 
 
+// GENERATORS
+function * getTimescales() {
+	while (true) {
+		yield TIME_3_H;
+		yield TIME_6_H;
+		yield TIME_12_H;
+		yield TIME_24_H;
+	}	
+}
+const timescales = getTimescales();
+
+
 // STATE
 const state = {
 	time: {
@@ -51,7 +64,7 @@ const state = {
 	},
 	graph: {
 		bgs: [],
-		timescale: TIME_6_H,
+		timescale: timescales.next().value,
 	},
 };
 
@@ -71,7 +84,8 @@ const dom = {
 			time: {
 				self: document.querySelector("#graph-axis-time"),
 				ticks: document.querySelectorAll(".graph-axis-time-tick"),
-				labels: document.querySelectorAll(".graph-axis-time-tick-label"),
+				labels: document.querySelectorAll(".graph-axis-time-label"),
+				now: document.querySelector("#graph-axis-time-now"),
 			},
 		},
 		targets: {
@@ -337,17 +351,16 @@ const getFile = (filePath, parser = JSON.parse, encoding = "UTF-8") => {
  */
 const loadBGs = (json) => {
 	console.log("Loading BG data into app state...");
-	const { time: { now }, graph: { timescale } } = state;
+	const { time: { now } } = state;
 				
 	// Get BG times from JSON
 	const times = Object.keys(json);
 
-	// Make BG objects with epoch time, and keep only the ones that fit
-	// in graph
+	// Make BG objects with epoch time, and keep only the last 24 hours
 	const bgs = times.map((t) => {
 		return { t: getEpochTime(parseTime(t)), bg: json[t] };
 	}).filter((bg) => {
-		return bg.t >= now.epoch - timescale;
+		return bg.t >= now.epoch - TIME_24_H;
 	});
 	
 	// Sort them
@@ -493,8 +506,8 @@ const drawGraphBGs = () => {
 		const bg = bgs[i];
 
 		// Compute its position in graph
-		const x = (bg.t - then) / timescale * ui.graph.width;
-		const y = (GRAPH_BG_MAX - bg.bg) / GRAPH_BG_SCALE * ui.graph.height;
+		const x = ((bg.t - then) / timescale - GRAPH_TIME_PADDING) * ui.graph.width;
+		const y = (GRAPH_BG_MAX - bg.bg) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
 
 		// Draw it
 		el.setAttribute("r", 2);
@@ -511,11 +524,25 @@ const drawGraphBGs = () => {
 
 
 /**
+ * DRAWCURRENTTIMETICK
+ * Draw current time tick (line) in graph
+ */
+const drawCurrentTimeTick = () => {
+	const x = (1 - GRAPH_TIME_PADDING) * ui.graph.width;
+	dom.graph.axes.time.now.setAttribute("x1", x);
+	dom.graph.axes.time.now.setAttribute("y1", 0);
+	dom.graph.axes.time.now.setAttribute("x2", x);
+	dom.graph.axes.time.now.setAttribute("y2", "100%");
+};
+
+
+/**
  * DRAWGRAPHTIMEAXIS
  * Draw time axis according to current state time
  */
 const drawGraphTimeAxis = () => {
 	const { time: { now }, graph: { timescale } } = state;
+	const then = now.epoch - timescale;
 
 	// Compute last round hour in epoch time
 	const lastEpoch = getEpochTime(getLastRoundHour(now.date));
@@ -551,17 +578,27 @@ const drawGraphTimeAxis = () => {
 		return new Date((lastEpoch + n * 3600) * 1000);
 	});
 
-	// Pad ticks
-	dom.graph.axes.time.self.style.paddingRight = now.epoch - lastEpoch;
-
 	// Draw ticks and labels
-	dom.graph.axes.time.labels.forEach((label, i) => {
+	dom.graph.axes.time.ticks.forEach((tick, i) => {
+		const label = dom.graph.axes.time.labels[i];
+
+		// Compute tick hour
 		const date = hours[i];
+		const epoch = getEpochTime(date);
 		const hour = formatTime(date.getHours());
 		const minute = formatTime(date.getMinutes());
 
-		// Write its label
-		label.innerHTML = `${hour}:${minute}`;
+		// Position tick
+		const x = ((epoch - then) / timescale - GRAPH_TIME_PADDING) * ui.graph.width;
+		tick.setAttribute("x1", x);
+		tick.setAttribute("y1", ui.graph.height);
+		tick.setAttribute("x2", x);
+		tick.setAttribute("y2", ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
+
+		// Position and assign value to its label
+		label.setAttribute("x", x - 6);
+		label.setAttribute("y", ui.graph.height - 6);
+		label.textContent = `${hour}:${minute}`;
 	});
 };
 
@@ -575,8 +612,8 @@ const drawBGTargetRange = () => {
 
 	// Compute position of targets in graph
 	const y = {
-		low: (GRAPH_BG_MAX - GRAPH_BG_LOW) / GRAPH_BG_SCALE * ui.graph.height,
-		high: (GRAPH_BG_MAX - GRAPH_BG_HIGH) / GRAPH_BG_SCALE * ui.graph.height,
+		low: (GRAPH_BG_MAX - GRAPH_BG_LOW) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT),
+		high: (GRAPH_BG_MAX - GRAPH_BG_HIGH) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT),
 	};
   
 	// Draw low target
@@ -618,6 +655,18 @@ const draw = () => {
  */
 const drawStatic = () => {
 	drawBGTargetRange();
+	drawCurrentTimeTick();
+};
+
+
+/**
+ * ROTATETIMESCALE
+ * Change timescale for the next one in line
+ */
+const rotateTimescale = () => {
+	state.graph.timescale = timescales.next().value;
+	drawGraphTimeAxis();
+	drawGraphBGs();
 };
 
 
@@ -628,11 +677,16 @@ const drawStatic = () => {
 /* -------------------------------------------------------------------------- */
 window.onload = () => {
 
-	// When pressing on hardware key
+	// When pressing on back button
     document.addEventListener("tizenhwkey", (e) => {
     	if(e.keyName === "back") {
     		tizen.application.getCurrentApplication().exit();
     	}
+	});
+
+	// When touching app
+	document.addEventListener("click", (e) => {
+		rotateTimescale();
 	});
 
 	// Draw app
@@ -640,10 +694,9 @@ window.onload = () => {
 	draw();
 
 	// Every minute
-	setInterval(() => {
-		updateTime();
-		draw();
+	setInterval(updateTime, 60 * 1000);
 
-	}, TIME_REFRESH);
+	// Every 5 minutes
+	setInterval(draw, 5 * 60 * 1000);
     
 };
