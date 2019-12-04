@@ -1,6 +1,6 @@
 /* -------------------------------------------------------------------------- */
 /* File: app.js                                                               */
-/* App: SugarBit                                                              */
+/* App: SugarWatch                                                              */
 /* Author: David Leclerc                                                      */
 /* Date: 30.11.2019                                                           */
 /* Version: 1.0.0                                                             */
