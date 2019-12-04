@@ -8,7 +8,6 @@
 
 // CONSTANTS
 // Time
-const TIME_INIT = new Date();
 const TIME_3_H = 3 * 60 * 60;    // [s]
 const TIME_6_H = 2 * TIME_3_H;   // [s]
 const TIME_12_H = 2 * TIME_6_H;  // [s]
@@ -58,8 +57,8 @@ const timescales = getTimescales();
 const state = {
 	time: {
 		now: {
-			date: TIME_INIT,
-			epoch: TIME_INIT.getTime() / 1000,
+			date: null,
+			epoch: 0,
 		},
 	},
 	graph: {
@@ -240,107 +239,43 @@ const compareBGs = (bg1, bg2) => {
 /* -------------------------------------------------------------------------- */
 
 /**
- * DOWNLOAD
- * Returns a promise that resolves to the relative path of the requested file,
- * using a DownloadRequest object. The function works similarly to 'fetch', that
- * is it retrieves a file from a server using an HTTP GET request.
+ * FETCH
+ * Returns a promise that resolves to the parsed content of the file retrieved
+ * from the given URL, using an HTTP GET request.
  */
-const download = (request) => {
+const fetch = (url, headers = {}, method = "GET", async = true, parse = JSON.parse) => {
 	return new Promise((resolve, reject) => {
+		console.log(`Fetching data at: ${url}`);
+		const request = new XMLHttpRequest();
 
-		// Download if network is available
-		tizen.systeminfo.getPropertyValue("NETWORK", (networkInfo) => {
-			console.log(`Downloading file at: ${request.url}`);
-			
-			// No network
-			if (networkInfo.networkType === "NONE") {
-				reject("No network connection. Downloading is impossible.");
-			}
+		// Success callback
+		const onsuccess = () => {
+			console.log("Fetched data successfully.");
+			resolve(parse(request.response));
+		};
 
-			// Define a listener object for the download
-			const listener = {
-	
-				// When download progresses
-				onprogress: (id, i, n) => {
-					console.log(`Progressing: [${id}] (${i}/${n})`);
-				},
-				
-				// When user pauses download
-				onpaused: (id) => {
-					console.log(`Paused: [${id}]`);
-				},
-				
-				// When user cancels download
-				oncanceled: (id) => {
-					console.log(`Canceled: [${id}]`);
-				},
-				
-				// When download is completed
-				oncompleted: (id, path) => {
-					console.log(`Completed: [${id}] at '${path}' (${tizen.download.getMIMEType(id)})`);
+		// Fail callback
+		const onfail = (err) => {
+			console.error("Could not fetch data.");
+			reject(err);
+		}
 
-					// Resolve promise with relative path to downloaded file
-					resolve(path);
-				},
-				
-				// When downloads failed
-				onfailed: (id, err) => {
-					reject(`Failed: [${id}] (${err.name})`);
-				},
-			};
-			
-			// Start download
-			tizen.download.start(request.get(), listener);
-		});
-	});
-};
+		// Event listeners
+		request.onload = onsuccess;
+		request.onabort = onfail;
+		request.onerror = onfail;
+		request.ontimeout = onfail;
 
+		// Open request
+		request.open(method, url, async);
 
-/**
- * GETFILE
- * Returns a promise, which resolves to an object, corresponding to the parsed
- * content of the  file stored at given relative path
- */
-const getFile = (filePath, parser = JSON.parse, encoding = "UTF-8") => {
-	return new Promise((resolve, reject) => {
-		const [ dirPath, _ ] = filePath.split("/").slice(-2);
-		console.log("Getting and parsing file content...");
+		// Set its HTTP headers
+		for (const [ property, value ] of Object.entries(headers)) {
+			request.setRequestHeader(property, value);
+		}
 
-		// Get directory handler
-		tizen.filesystem.resolve(dirPath, (dir) => {
-			console.log("Got directory handler.");
-
-			// Get file handler
-			tizen.filesystem.resolve(filePath, (file) => {
-				console.log("Got file handler.");
-
-				// Read file content as string and parse as an object
-				file.readAsText((str) => {
-					const content = parser(str);
-					console.log("File content parsed.");
-
-					// Delete file once it's been parsed
-					dir.deleteFile(filePath, () => {
-						console.log("File deleted.");
-
-						// Return content object
-						resolve(content);
-						
-					}, (err) => {
-						reject("Could not delete file once read.");
-					});
-
-				}, (err) => {
-					reject("Could not read file content.");
-				}, encoding);
-
-			}, (err) => {
-				reject("Could not get file handler.");
-			}, "r");
-
-		}, (err) => {
-			reject("Could not get directory handler.");
-		}, "rw");
+		// Execute it
+		request.send();
 	});
 };
 
@@ -373,12 +308,11 @@ const loadBGs = (json) => {
 
 
 /**
- * FETCHBGS
- * Fetch recent BGs from server and store them in app state
+ * GETBGS
+ * Fetch recent BGs from server and inject them into app state
  */
-const fetchBGs = () => {
-	return download(new DownloadRequest(BG_REQUEST_URL, BG_REQUEST_HEADERS))
-		.then(getFile)
+const getBGs = () => {
+	return fetch(BG_REQUEST_URL, BG_REQUEST_HEADERS)
 		.then(loadBGs)
 		.catch((err) => {
 			console.error("Could not fetch BGs.");
@@ -456,11 +390,11 @@ const drawDashBG = () => {
 	}
 
 	// Last BG and dBG
-	const isOld = bg ? bg.t < now.epoch - BG_MAX_AGE : true;
-	const isDeltaValid = last ? bg.t - last.t < BG_MAX_DELTA : false;
+	const isOld = bg !== undefined ? bg.t < now.epoch - BG_MAX_AGE : true;
+	const isDeltaValid = last !== undefined ? bg.t - last.t < BG_MAX_DELTA : false;
 
 	// Update current BG and style it accordingly
-	if (bg) {
+	if (bg !== undefined) {
 		dom.dash.bg.innerHTML = formatBG(bg.bg);
 		dom.dash.bg.style.color = colorBG(bg.bg);
 		dom.dash.bg.style.textDecoration = isOld ? "line-through" : "none";
@@ -470,9 +404,10 @@ const drawDashBG = () => {
 	}
 
 	// Update latest BG delta and style it as well
-	if (!isOld && isDeltaValid) {
+	if (isDeltaValid) {
 		dom.dash.delta.innerHTML = `(${formatDeltaBG(bg.bg - last.bg)})`;
 		dom.dash.delta.style.color = colorBG(bg.bg);
+		dom.dash.delta.style.textDecoration = isOld ? "line-through" : "none";
 
 		show(dom.dash.delta);
 
@@ -492,6 +427,23 @@ const drawGraphBGs = () => {
 	// Get initial time in graph
 	const then = now.epoch - timescale;
 
+	// Define BG element radius based on current timescale
+	let r;
+	switch (timescale) {
+		case TIME_3_H:
+			r = 3;
+			break;
+		case TIME_6_H:
+			r = 2.5;
+			break;
+		case TIME_12_H:
+			r = 2;
+			break;
+		case TIME_24_H:
+			r = 1.5;
+			break;
+	}
+
 	// Draw each BG element (there are 288 in SVG,
 	// corresponding to 24h worth of data)
 	dom.graph.bgs.forEach((el, i) => {
@@ -510,7 +462,7 @@ const drawGraphBGs = () => {
 		const y = (GRAPH_BG_MAX - bg.bg) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
 
 		// Draw it
-		el.setAttribute("r", 2);
+		el.setAttribute("r", r);
 		el.setAttribute("cx", x);
 		el.setAttribute("cy", y);
 
@@ -524,10 +476,10 @@ const drawGraphBGs = () => {
 
 
 /**
- * DRAWCURRENTTIMETICK
+ * DRAWGRAPHTIMEAXISNOW
  * Draw current time tick (line) in graph
  */
-const drawCurrentTimeTick = () => {
+const drawGraphTimeAxisNow = () => {
 	const x = (1 - GRAPH_TIME_PADDING) * ui.graph.width;
 	dom.graph.axes.time.now.setAttribute("x1", x);
 	dom.graph.axes.time.now.setAttribute("y1", 0);
@@ -604,16 +556,17 @@ const drawGraphTimeAxis = () => {
 
 
 /**
- * DRAWBGTARGETRANGE
+ * DRAWGRAPHBGTARGETRANGE
  * Draw BG target range in graph
  */
-const drawBGTargetRange = () => {
+const drawGraphBGTargetRange = () => {
 	const { low, high } = dom.graph.targets;
 
 	// Compute position of targets in graph
+	const h = (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
 	const y = {
-		low: (GRAPH_BG_MAX - GRAPH_BG_LOW) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT),
-		high: (GRAPH_BG_MAX - GRAPH_BG_HIGH) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT),
+		low: (GRAPH_BG_MAX - GRAPH_BG_LOW) / GRAPH_BG_SCALE * h,
+		high: (GRAPH_BG_MAX - GRAPH_BG_HIGH) / GRAPH_BG_SCALE * h,
 	};
   
 	// Draw low target
@@ -635,15 +588,13 @@ const drawBGTargetRange = () => {
 
 
 /**
- * DRAW
- * Re-draw app using current state
+ * DRAWBGs
+ * Draw BG-related components using current state
  */
-const draw = () => {
-	drawDashTime();
-	drawGraphTimeAxis();
-
-    fetchBGs().then(() => {
+const drawBGs = () => {
+	getBGs().then(() => {
 		drawDashBG();
+		drawGraphTimeAxis();
 		drawGraphBGs();
 	});
 };
@@ -651,17 +602,17 @@ const draw = () => {
 
 /**
  * DRAWSTATIC
- * Draw elements that never change
+ * Draw static components
  */
 const drawStatic = () => {
-	drawBGTargetRange();
-	drawCurrentTimeTick();
+	drawGraphBGTargetRange();
+	drawGraphTimeAxisNow();
 };
 
 
 /**
  * ROTATETIMESCALE
- * Change timescale for the next one in line
+ * Use next available timescale and re-draw components related to it
  */
 const rotateTimescale = () => {
 	state.graph.timescale = timescales.next().value;
@@ -677,26 +628,48 @@ const rotateTimescale = () => {
 /* -------------------------------------------------------------------------- */
 window.onload = () => {
 
+	// Pausing/resuming the app
+	document.addEventListener("visibilitychange", () => {
+		
+		// Paused
+		if (document.hidden) {
+			console.log("The app was paused.");
+		}
+		
+		// Resumed
+		else {
+			console.log("The app was resumed.");
+			updateTime();
+			drawDashTime();
+			drawBGs();
+		}
+	});
+
 	// When pressing on back button
-    document.addEventListener("tizenhwkey", (e) => {
-    	if(e.keyName === "back") {
-    		tizen.application.getCurrentApplication().exit();
-    	}
+	document.addEventListener("tizenhwkey", (e) => {
+		if(e.keyName === "back") {
+			tizen.application.getCurrentApplication().exit();
+		}
 	});
 
 	// When touching app
-	document.addEventListener("click", (e) => {
-		rotateTimescale();
-	});
+	document.addEventListener("click", rotateTimescale);
 
-	// Draw app
+	// Draw static components
 	drawStatic();
-	draw();
+
+	// Initial draw
+	updateTime();
+	drawDashTime();
+	drawBGs();
 
 	// Every minute
-	setInterval(updateTime, 60 * 1000);
+	setInterval(() => {
+		updateTime();
+		drawDashTime();
+	}, 60 * 1000);
 
 	// Every 5 minutes
-	setInterval(draw, 5 * 60 * 1000);
+	setInterval(drawBGs, 5 * 60 * 1000);
     
 };
