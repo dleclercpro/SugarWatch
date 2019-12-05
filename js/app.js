@@ -12,12 +12,14 @@ const TIME_3_H = 3 * 60 * 60;    // [s]
 const TIME_6_H = 2 * TIME_3_H;   // [s]
 const TIME_12_H = 2 * TIME_6_H;  // [s]
 const TIME_24_H = 2 * TIME_12_H; // [s]
+const TIME_REFRESH_RATE = 60;    // [s]
 
 // BGs
 const BG_UNITS = "mmol/L";
 const BG_NONE = "---";
-const BG_MAX_AGE = 15 * 60;   // [s]
-const BG_MAX_DELTA = 10 * 60; // [s]
+const BG_MAX_AGE = 15 * 60;       // [s]
+const BG_DELTA_MAX_AGE = 15 * 60; // [s]
+const BG_REFRESH_RATE = 5 * 60;   // [s]
 
 // Graph
 const GRAPH_BG_MIN = 0;                             // [mmol/L]
@@ -56,10 +58,8 @@ const timescales = getTimescales();
 // STATE
 const state = {
 	time: {
-		now: {
-			date: null,
-			epoch: 0,
-		},
+		now: { date: null, epoch: 0 },
+		lastFetch: { date: null, epoch: 0 },
 	},
 	graph: {
 		bgs: [],
@@ -98,30 +98,6 @@ const dom = {
 // UI
 const ui = {
 	graph: dom.graph.self.getBoundingClientRect(),
-};
-
-
-// CLASSES
-class DownloadRequest {
-	
-	constructor(url, headers) {
-		this.url = url;
-		this.dir = "wgt-private-tmp";
-		this.headers = headers;
-
-		// Define request and its headers
-		this.request = new tizen.DownloadRequest(this.url, this.dir);
-		this.request.httpHeader = this.headers;
-	}
-
-	get() {
-		return this.request;
-	}
-
-	set(request) {
-		this.request = request;
-	}
-
 };
 
 
@@ -251,7 +227,10 @@ const fetch = (url, headers = {}, method = "GET", async = true, parse = JSON.par
 		// Success callback
 		const onsuccess = () => {
 			console.log("Fetched data successfully.");
-			resolve(parse(request.response));
+			resolve({
+				response: parse(request.response),
+				lastModified: request.getResponseHeader("Last-Modified"),
+			});
 		};
 
 		// Fail callback
@@ -313,7 +292,20 @@ const loadBGs = (json) => {
  */
 const getBGs = () => {
 	return fetch(BG_REQUEST_URL, BG_REQUEST_HEADERS)
-		.then(loadBGs)
+		.then((res) => {
+			const { response, lastModified } = res;
+			console.log(`Last BG upload on server: ${lastModified}`);
+
+			// Load BGs into app state
+			loadBGs(response);
+
+			// Update last BG update time in state
+			const now = new Date();
+			state.time.lastFetch = {
+				date: now,
+				epoch: getEpochTime(now),
+			};
+		})
 		.catch((err) => {
 			console.error("Could not fetch BGs.");
 		});
@@ -391,7 +383,7 @@ const drawDashBG = () => {
 
 	// Last BG and dBG
 	const isOld = bg !== undefined ? bg.t < now.epoch - BG_MAX_AGE : true;
-	const isDeltaValid = last !== undefined ? bg.t - last.t < BG_MAX_DELTA : false;
+	const isDeltaValid = last !== undefined ? bg.t - last.t < BG_DELTA_MAX_AGE : false;
 
 	// Update current BG and style it accordingly
 	if (bg !== undefined) {
@@ -589,9 +581,19 @@ const drawGraphBGTargetRange = () => {
 
 /**
  * DRAWBGs
- * Draw BG-related components using current state
+ * Draw BG-related components at given refresh rate (5 minutes, based on
+ * frequency of BG measurements by Dexcom G6), using current app state
  */
 const drawBGs = () => {
+	const { now, lastFetch } = state.time;
+	const dt = now.epoch - lastFetch.epoch;
+
+	// Only fetch and draw BGs every given time rate
+	if (dt < BG_REFRESH_RATE) {
+		console.log(`Last BG fetch less than ${Math.ceil(dt / 60)} minute(s) ago.`);
+		return;
+	}
+
 	getBGs().then(() => {
 		drawDashBG();
 		drawGraphTimeAxis();
@@ -667,9 +669,9 @@ window.onload = () => {
 	setInterval(() => {
 		updateTime();
 		drawDashTime();
-	}, 60 * 1000);
+	}, TIME_REFRESH_RATE * 1000);
 
 	// Every 5 minutes
-	setInterval(drawBGs, 5 * 60 * 1000);
+	setInterval(drawBGs, BG_REFRESH_RATE * 1000);
     
 };
