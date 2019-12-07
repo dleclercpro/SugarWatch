@@ -13,13 +13,13 @@ const TIME_6_H = 2 * TIME_3_H;   // [s]
 const TIME_12_H = 2 * TIME_6_H;  // [s]
 const TIME_24_H = 2 * TIME_12_H; // [s]
 const TIME_REFRESH_RATE = 60;    // [s]
+const TIME_UPLOAD_RATE = 3 * 60; // [s]
 
 // BGs
 const BG_UNITS = "mmol/L";
 const BG_NONE = "---";
 const BG_MAX_AGE = 15 * 60;       // [s]
 const BG_DELTA_MAX_AGE = 15 * 60; // [s]
-const BG_REFRESH_RATE = 5 * 60;   // [s]
 
 // Graph
 const GRAPH_BG_MAX = 16;           // [mmol/L]
@@ -57,7 +57,10 @@ const timescales = getTimescales();
 const state = {
 	time: {
 		now: { date: null, epoch: 0 },
-		lastUpload: { date: null, epoch: 0 },
+		last: {
+			fetch: { date: null, epoch: 0 },
+			upload: { date: null, epoch: 0 },
+		},
 	},
 	graph: {
 		bgs: [],
@@ -153,11 +156,20 @@ const setCurrentTime = (t) => {
 
 
 /**
+ * SETLASTFETCHTIME
+ * Update last time BG data was fetched from server
+ */
+const setLastFetchTime = (t) => {
+	state.time.last.fetch = { date: t, epoch: getEpochTime(t) };
+};
+
+
+/**
  * SETLASTUPLOADTIME
- * Update last time BG JSON file was modified (uploaded on server)
+ * Update last time BG data was uploaded on server
  */
 const setLastUploadTime = (t) => {
-	state.time.lastUpload = { date: t, epoch: getEpochTime(t) };
+	state.time.last.upload = { date: t, epoch: getEpochTime(t) };
 };
 
 
@@ -166,6 +178,15 @@ const setLastUploadTime = (t) => {
 /* -------------------------------------------------------------------------- */
 /* FORMAT FUNCTIONS                                                           */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * FORMATNUMBER
+ * Round to and represent number using a given number of decimals
+ */
+const formatNumber = (x, n = 0) => {
+	const exp = Math.pow(10, n);
+	return (Math.round(x * exp) / exp).toFixed(n);
+};
 
 /**
  * FORMATTIME
@@ -251,10 +272,12 @@ const fetch = (url, headers = {}, method = "GET", async = true) => {
 	return new Promise((resolve, reject) => {
 		console.log(`Fetching data at: ${url}`);
 		const request = new XMLHttpRequest();
+		let start, end;
 
 		// Success callback
 		const onsuccess = () => {
-			console.log("Fetched data successfully.");
+			end = getEpochTime(new Date());
+			console.log(`Fetched data successfully in ${formatNumber(end - start, 3)} s.`);
 			resolve({
 				headers: request.getAllResponseHeaders(),
 				content: request.response,
@@ -273,7 +296,7 @@ const fetch = (url, headers = {}, method = "GET", async = true) => {
 		request.onerror = onfail;
 		request.ontimeout = onfail;
 
-		// Open request
+		// Initialize request
 		request.open(method, url, async);
 
 		// Set its HTTP headers
@@ -282,16 +305,17 @@ const fetch = (url, headers = {}, method = "GET", async = true) => {
 		}
 
 		// Execute it
+		start = getEpochTime(new Date());
 		request.send();
 	});
 };
 
 
 /**
- * JSONIZERESPONSEHEADERS
+ * JSONIZEHEADERS
  * Convert HTTP request bytestring response headers to an object
  */
-const jsonizeResponseHeaders = (str) => {
+const jsonizeHeaders = (str) => {
 
 	// Convert the header string into an array of individual headers
     const headers = str.trim().split(/[\r\n]+/);
@@ -347,10 +371,11 @@ const getBGs = () => {
 			let { headers, content } = response;
 
 			// Parse request response content and headers
-			headers = jsonizeResponseHeaders(headers);
+			headers = jsonizeHeaders(headers);
 			content = JSON.parse(content);
 
-			// Update last BG upload time in state
+			// Update last BG fetch/upload time in state
+			setLastFetchTime(new Date());
 			setLastUploadTime(new Date(headers["Last-Modified"]));
 
 			// Load BGs into app state
@@ -655,14 +680,19 @@ const updateTime = () => {
  */
 const update = () => {
 	
-	// Update and read current time
+	// Update and read current time markers
 	updateTime();
-	const { now, lastUpload } = state.time;
-	const dt = now.epoch - lastUpload.epoch;
+	const { now, last } = state.time;
+	const dt = {
+		fetch: now.epoch - last.fetch.epoch,
+		upload: now.epoch - last.upload.epoch,
+	};
 
-	// Only fetch every given time rate: only re-draw if too early
-	if (dt < BG_REFRESH_RATE) {
-		console.log(`Last BG uploaded less than ${Math.ceil(dt / 60)} minute(s) ago.`);
+	// Fetch BG data according to upload rate. In case upload is too old (or has
+	// stopped), poll at said rate. Otherwise, simply re-draw app.
+	if (dt.upload < TIME_UPLOAD_RATE || dt.fetch < TIME_UPLOAD_RATE) {
+		console.log(`Last BG upload: ${Math.round(dt.upload / 60)} minute(s) ago.`);
+		console.log(`Last BG fetch: ${Math.round(dt.fetch / 60)} minute(s) ago.`);
 		draw();
 		return;
 	}

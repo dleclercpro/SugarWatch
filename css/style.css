@@ -7,7 +7,7 @@
 	margin: 0;
 	padding: 0;
 	font-family: Ubuntu, sans-serif;
-    color: #ffffff;
+    color: #eeeeee;
 }
 
 html {
@@ -58,7 +58,7 @@ body {
 }
 
 #dash-time {
-	font-size: 28px;
+	font-size: 26px;
 	margin-top: 2px;
 }
 
@@ -87,18 +87,18 @@ body {
 
 #graph-axis-time-now {
 	stroke-width: 1;
-	stroke: #ffffff;
+	stroke: #eeeeee;
 	stroke-dasharray: 5;
 	opacity: 0.4;
 }
 
 .graph-axis-time-tick {
 	stroke-width: 1;
-	stroke: #ffffff;
+	stroke: #eeeeee;
 }
 
 .graph-axis-time-label {
 	text-anchor: end;
 	font-size: 15px;
-	fill: #ffffff;
+	fill: #eeeeee;
 }
