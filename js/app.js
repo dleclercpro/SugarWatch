@@ -22,11 +22,9 @@ const BG_DELTA_MAX_AGE = 15 * 60; // [s]
 const BG_REFRESH_RATE = 5 * 60;   // [s]
 
 // Graph
-const GRAPH_BG_MIN = 0;                             // [mmol/L]
 const GRAPH_BG_MAX = 16;                            // [mmol/L]
 const GRAPH_BG_LOW = 3.8;                           // [mmol/L]
 const GRAPH_BG_HIGH = 8.0;                          // [mmol/L]
-const GRAPH_BG_SCALE = GRAPH_BG_MAX - GRAPH_BG_MIN; // [mmol/L]
 const GRAPH_TIME_PADDING = 0.2;                     // [-]
 const GRAPH_TIME_AXIS_HEIGHT = 20;                  // [px]
 
@@ -52,7 +50,6 @@ function * getTimescales() {
 		yield TIME_24_H;
 	}	
 }
-const timescales = getTimescales();
 
 
 // STATE
@@ -63,7 +60,10 @@ const state = {
 	},
 	graph: {
 		bgs: [],
-		timescale: timescales.next().value,
+		scales: {
+			time: getTimescales(),
+			bg: GRAPH_BG_MAX,
+		},
 	},
 };
 
@@ -152,6 +152,20 @@ const updateTime = () => {
 };
 
 
+/**
+ * UPDATELASTFETCH
+ * Update last BG fetch time
+ */
+const updateLastFetch = () => {
+	const now = new Date();
+	
+	state.time.lastFetch = {
+		date: now,
+		epoch: getEpochTime(now),
+	};
+};
+
+
 
 
 /* -------------------------------------------------------------------------- */
@@ -188,23 +202,6 @@ const formatDeltaBG = (dBG) => {
 	const formattedDelta = formatBG(dBG);
 
 	return dBG >= 0 ? "+" + formattedDelta : formattedDelta;
-};
-
-
-
-
-/* -------------------------------------------------------------------------- */
-/* MISC FUNCTIONS                                                             */
-/* -------------------------------------------------------------------------- */
-
-/**
- * COMPAREBGS
- * BG comparator
- */
-const compareBGs = (bg1, bg2) => {
-	if (bg1.t < bg2.t) { return -1; }
-	if (bg1.t > bg2.t) { return 1; }
-	return 0;
 };
 
 
@@ -261,9 +258,9 @@ const fetch = (url, headers = {}, method = "GET", async = true, parse = JSON.par
 
 /**
  * LOADBGS
- * Load BGs from JSON object into app state
+ * Load BGs with maximum given age from JSON object into app state
  */
-const loadBGs = (json) => {
+const loadBGs = (json, maxAge = TIME_24_H) => {
 	console.log("Loading BG data into app state...");
 	const { time: { now } } = state;
 				
@@ -274,14 +271,19 @@ const loadBGs = (json) => {
 	const bgs = times.map((t) => {
 		return { t: getEpochTime(parseTime(t)), bg: json[t] };
 	}).filter((bg) => {
-		return bg.t >= now.epoch - TIME_24_H;
+		return bg.t >= now.epoch - maxAge;
 	});
 	
-	// Sort them
-	bgs.sort(compareBGs);
+	// Sort them timely
+	bgs.sort((bg1, bg2) => {
+		if (bg1.t < bg2.t) { return -1; }
+		else if (bg1.t > bg2.t) { return 1; }
+		else { return 0; }
+	});
 	
-	// Store them in state
+	// Store them (as well as new BG scale if necessary) in app state
 	state.graph.bgs = bgs;
+	state.graph.scales.bg = Math.max(GRAPH_BG_MAX, ...bgs.map((bg) => { return bg.bg; }));
 	console.log("BG data loaded.");
 };
 
@@ -300,11 +302,7 @@ const getBGs = () => {
 			loadBGs(response);
 
 			// Update last BG update time in state
-			const now = new Date();
-			state.time.lastFetch = {
-				date: now,
-				epoch: getEpochTime(now),
-			};
+			updateLastFetch();
 		})
 		.catch((err) => {
 			console.error("Could not fetch BGs.");
@@ -414,7 +412,9 @@ const drawDashBG = () => {
  * Draw BGs in graph
  */
 const drawGraphBGs = () => {
-	const { time: { now }, graph: { bgs, timescale } } = state;
+	const { time: { now }, graph: { bgs, scales } } = state;
+	const timescale = scales.time.value;
+	const bgScale = scales.bg;
 
 	// Get initial time in graph
 	const then = now.epoch - timescale;
@@ -451,7 +451,7 @@ const drawGraphBGs = () => {
 
 		// Compute its position in graph
 		const x = ((bg.t - then) / timescale - GRAPH_TIME_PADDING) * ui.graph.width;
-		const y = (GRAPH_BG_MAX - bg.bg) / GRAPH_BG_SCALE * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
+		const y = (bgScale - bg.bg) / bgScale * (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
 
 		// Draw it
 		el.setAttribute("r", r);
@@ -485,7 +485,8 @@ const drawGraphTimeAxisNow = () => {
  * Draw time axis according to current state time
  */
 const drawGraphTimeAxis = () => {
-	const { time: { now }, graph: { timescale } } = state;
+	const { time: { now }, graph: { scales } } = state;
+	const timescale = scales.time.value;
 	const then = now.epoch - timescale;
 
 	// Compute last round hour in epoch time
@@ -553,12 +554,13 @@ const drawGraphTimeAxis = () => {
  */
 const drawGraphBGTargetRange = () => {
 	const { low, high } = dom.graph.targets;
+	const bgScale = state.graph.scales.bg;
 
 	// Compute position of targets in graph
 	const h = (ui.graph.height - GRAPH_TIME_AXIS_HEIGHT);
 	const y = {
-		low: (GRAPH_BG_MAX - GRAPH_BG_LOW) / GRAPH_BG_SCALE * h,
-		high: (GRAPH_BG_MAX - GRAPH_BG_HIGH) / GRAPH_BG_SCALE * h,
+		low: (bgScale - GRAPH_BG_LOW) / bgScale * h,
+		high: (bgScale - GRAPH_BG_HIGH) / bgScale * h,
 	};
   
 	// Draw low target
@@ -598,17 +600,8 @@ const drawBGs = () => {
 		drawDashBG();
 		drawGraphTimeAxis();
 		drawGraphBGs();
+		drawGraphBGTargetRange();
 	});
-};
-
-
-/**
- * DRAWSTATIC
- * Draw static components
- */
-const drawStatic = () => {
-	drawGraphBGTargetRange();
-	drawGraphTimeAxisNow();
 };
 
 
@@ -617,7 +610,7 @@ const drawStatic = () => {
  * Use next available timescale and re-draw components related to it
  */
 const rotateTimescale = () => {
-	state.graph.timescale = timescales.next().value;
+	state.graph.scales.time.next();
 	drawGraphTimeAxis();
 	drawGraphBGs();
 };
@@ -658,7 +651,7 @@ window.onload = () => {
 	document.addEventListener("click", rotateTimescale);
 
 	// Draw static components
-	drawStatic();
+	drawGraphTimeAxisNow();
 
 	// Initial draw
 	updateTime();
